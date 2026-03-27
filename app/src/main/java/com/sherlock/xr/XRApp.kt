@@ -17,12 +17,23 @@ import com.sherlock.xr.ui.DetailedPopup
 import com.sherlock.xr.ui.LabelBadge
 import com.sherlock.xr.viewmodel.XRMainViewModel
 
+import androidx.xr.compose.platform.LocalSpatialCapabilities
+import androidx.xr.scenecore.scene
+
 @Composable
 fun XRApp(
     viewModel: XRMainViewModel = viewModel()
 ) {
     val devices = viewModel.devices.collectAsState().value
     val session = LocalSession.current
+    val spatialCapabilities = LocalSpatialCapabilities.current
+    val isSpatialUiEnabled = spatialCapabilities.isSpatialUiEnabled
+
+    LaunchedEffect(isSpatialUiEnabled) {
+        if (isSpatialUiEnabled) {
+            session?.scene?.requestFullSpaceMode()
+        }
+    }
 
     // Observe detections and perform raycasts
     LaunchedEffect(viewModel.pendingRaycasts) {

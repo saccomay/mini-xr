@@ -33,21 +33,37 @@ class XRMainViewModel : ViewModel() {
     // The ML Kit Detector (to be initialized by the Activity/UI Layer)
     var objectDetector: ObjectDetector? = null
 
-    // Process real camera frames using ML Kit
-    fun processCameraFrame(image: Image, rotation: Int) {
-        viewModelScope.launch {
-            val detector = objectDetector ?: return@launch
-            
-            // 1. Run ML Kit detection
-            val results: List<DetectedObjectResult> = detector.analyze(image, rotation)
-            
-            // 2. Mock Device Data onto whatever ML Kit detected
-            for (result in results) {
-                // Ignore background/unknowns if necessary, but here we process any detected object
-                val (x, y) = result.centerCoordinate
+    // Hàm này được CameraX (File MainActivity) gọi liên tục mỗi khi có frame mới từ Camera thực.
+    fun processCameraFrame(imageProxy: androidx.camera.core.ImageProxy) {
+        val image = imageProxy.image
+        // Nếu không thu được ảnh, phải release ngay imageProxy để hệ thống camera nhả frame tiếp theo.
+        if (image == null) {
+            imageProxy.close()
+            return
+        }
+        val rotation = imageProxy.imageInfo.rotationDegrees
+
+        // CHÚ Ý: Chuyển sang Dispatchers.Default để các tác vụ nặng (Convert YUV sang RGB, 
+        // ML Kit process) không làm block Main Thread (gây đơ UI XR).
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.Default) {
+            try {
+                val detector = objectDetector ?: return@launch
                 
-                // 3. Emit the 2D coordinate to the UI for SceneCore Raycasting
-                _pendingRaycasts.emit(Pair(x.toFloat(), y.toFloat()))
+                // Bước 1: Gọi model ML Kit để khoanh vùng tem/thiết bị trong khung hình
+                val results: List<DetectedObjectResult> = detector.analyze(image, rotation)
+                
+                // Bước 2: Duyệt qua các vật thể detect được
+                for (result in results) {
+                    // Bước 3: Lấy toạ độ tâm 2D (trên frame ảnh) của vật thể
+                    val (x, y) = result.centerCoordinate
+                    
+                    // Bước 4: Đẩy toạ độ này lên SharedFlow để tầng UI (androidx.xr.compose) 
+                    // nhận và thực hiện việc SceneCore Raycast (phóng tia 3D) từ đó.
+                    _pendingRaycasts.emit(Pair(x.toFloat(), y.toFloat()))
+                }
+            } finally {
+                // LUÔN LUÔN close imageProxy sau khi phân tích xong để CameraX feed frame mới.
+                imageProxy.close()
             }
         }
     }

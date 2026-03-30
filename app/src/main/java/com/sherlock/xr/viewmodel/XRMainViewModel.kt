@@ -15,11 +15,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.util.UUID
 
+data class MyVector3(val x: Float, val y: Float, val z: Float)
+
 // Represents an anchored device label in space
 data class AnchoredDevice(
     val id: String,
     val info: DeviceInfo,
-    val isDetailOpen: Boolean = false
+    val isDetailOpen: Boolean = false,
+    val worldPosition: MyVector3
 )
 
 class XRMainViewModel : ViewModel() {
@@ -27,21 +30,44 @@ class XRMainViewModel : ViewModel() {
     val devices: StateFlow<List<AnchoredDevice>> = _devices.asStateFlow()
 
     // Flow to emit 2D coordinates that need to be raycasted by the UI
-    private val _pendingRaycasts = MutableSharedFlow<Pair<Float, Float>>()
+    private val _pendingRaycasts = MutableSharedFlow<FloatArray>()
     val pendingRaycasts = _pendingRaycasts.asSharedFlow()
 
     // The ML Kit Detector (to be initialized by the Activity/UI Layer)
     var objectDetector: ObjectDetector? = null
 
+    private var isProcessingFrame = false
+    private var shouldScan = false
+
+    fun triggerScan() {
+        shouldScan = true
+    }
+
+    fun clearData() {
+        _devices.value = emptyList()
+    }
+
     // Hàm này được CameraX (File MainActivity) gọi liên tục mỗi khi có frame mới từ Camera thực.
     fun processCameraFrame(imageProxy: androidx.camera.core.ImageProxy) {
+        if (!shouldScan) {
+            imageProxy.close()
+            return
+        }
+
+        // Nếu đang xử lý một frame chưa xong thì drop frame mới nhất để chống lag thiết bị
+        if (isProcessingFrame) {
+            imageProxy.close()
+            return
+        }
+        
         val image = imageProxy.image
-        // Nếu không thu được ảnh, phải release ngay imageProxy để hệ thống camera nhả frame tiếp theo.
         if (image == null) {
             imageProxy.close()
             return
         }
         val rotation = imageProxy.imageInfo.rotationDegrees
+
+        isProcessingFrame = true
 
         // CHÚ Ý: Chuyển sang Dispatchers.Default để các tác vụ nặng (Convert YUV sang RGB, 
         // ML Kit process) không làm block Main Thread (gây đơ UI XR).
@@ -57,24 +83,31 @@ class XRMainViewModel : ViewModel() {
                     // Bước 3: Lấy toạ độ tâm 2D (trên frame ảnh) của vật thể
                     val (x, y) = result.centerCoordinate
                     
-                    // Bước 4: Đẩy toạ độ này lên SharedFlow để tầng UI (androidx.xr.compose) 
-                    // nhận và thực hiện việc SceneCore Raycast (phóng tia 3D) từ đó.
-                    _pendingRaycasts.emit(Pair(x.toFloat(), y.toFloat()))
+                    // Bước 4: Đẩy toạ độ cộng thêm kích thước khung hình sang UI
+                    _pendingRaycasts.emit(
+                        floatArrayOf(x.toFloat(), y.toFloat(), image.width.toFloat(), image.height.toFloat())
+                    )
                 }
             } finally {
                 // LUÔN LUÔN close imageProxy sau khi phân tích xong để CameraX feed frame mới.
                 imageProxy.close()
+                isProcessingFrame = false
             }
         }
     }
 
     // Called by the UI after SceneCore successfully raycasts the 2D point
-    fun onRaycastSuccessMockDataset() {
+    fun onRaycastSuccessMockDataset(position: MyVector3? = null) {
         val id = "Device-${UUID.randomUUID().toString().take(4)}"
         
         viewModelScope.launch {
             val info = DeviceRepository.fetchInfoMock(id)
-            val newDevice = AnchoredDevice(id = id, info = info)
+            val pos = position ?: MyVector3(
+                (Math.random() * 2f - 1f).toFloat(), 
+                0f, 
+                (-2f + (Math.random() * 2f - 1f)).toFloat()
+            )
+            val newDevice = AnchoredDevice(id = id, info = info, worldPosition = pos)
             _devices.value = _devices.value + newDevice
         }
     }

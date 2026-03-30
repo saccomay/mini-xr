@@ -29,13 +29,12 @@ fun LabelBadge(
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
-            .background(bgColor, RoundedCornerShape(16.dp))
             .clickable { onClick() }
             .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
         Text(
             text = "${info.status.name} | ${info.model}",
-            color = Color.White,
+            color = bgColor,
             fontWeight = FontWeight.Bold,
             fontSize = 18.sp
         )

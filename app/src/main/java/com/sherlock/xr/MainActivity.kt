@@ -86,4 +86,14 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
         cameraExecutor.shutdown()
     }
+
+    // Gán cứng phím Volume (Tăng/Giảm âm lượng) thành nút bấm vật lý để Quét/Scan.
+    // Việc này giúp kỹ thuật viên có thể rảnh tay hoàn toàn, không cần phải với tay bấm vào bảng điều khiển ảo trong không gian 3D.
+    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
+        if (keyCode == android.view.KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP) {
+            viewModel.triggerScan()
+            return true // Chặn không cho đổi âm lượng thực sự
+        }
+        return super.onKeyDown(keyCode, event)
+    }
 }

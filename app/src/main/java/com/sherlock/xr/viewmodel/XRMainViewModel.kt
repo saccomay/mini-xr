@@ -25,9 +25,19 @@ data class AnchoredDevice(
     val worldPosition: MyVector3
 )
 
+data class RawDetection(
+    val boundingBox: android.graphics.Rect,
+    val trackingId: Int?,
+    val labels: List<String>
+)
+
 class XRMainViewModel : ViewModel() {
     private val _devices = MutableStateFlow<List<AnchoredDevice>>(emptyList())
     val devices: StateFlow<List<AnchoredDevice>> = _devices.asStateFlow()
+
+    // Danh sách các vùng detect thô cho chế độ Debug
+    private val _debugDetections = MutableStateFlow<List<RawDetection>>(emptyList())
+    val debugDetections: StateFlow<List<RawDetection>> = _debugDetections.asStateFlow()
 
     // Flow to emit 2D coordinates that need to be raycasted by the UI
     private val _pendingRaycasts = MutableSharedFlow<FloatArray>()
@@ -38,6 +48,17 @@ class XRMainViewModel : ViewModel() {
 
     private var isProcessingFrame = false
     private var shouldScan = false
+    
+    // Trạng thái bật/tắt Debug Mode
+    private val _isDebugMode = MutableStateFlow(false)
+    val isDebugMode: StateFlow<Boolean> = _isDebugMode.asStateFlow()
+
+    fun toggleDebugMode() {
+        _isDebugMode.value = !_isDebugMode.value
+        if (!_isDebugMode.value) {
+            _debugDetections.value = emptyList() // Xoá data debug khi tắt
+        }
+    }
 
     fun triggerScan() {
         shouldScan = true
@@ -45,11 +66,13 @@ class XRMainViewModel : ViewModel() {
 
     fun clearData() {
         _devices.value = emptyList()
+        _debugDetections.value = emptyList()
     }
 
     // Hàm này được CameraX (File MainActivity) gọi liên tục mỗi khi có frame mới từ Camera thực.
     fun processCameraFrame(imageProxy: androidx.camera.core.ImageProxy) {
-        if (!shouldScan) {
+        if (!shouldScan && !_isDebugMode.value) { 
+            // Nếu không có lệnh triggerScan và KHÔNG ở chế độ Debug auto-scan thì bỏ qua frame
             imageProxy.close()
             return
         }
@@ -78,6 +101,17 @@ class XRMainViewModel : ViewModel() {
                 // Bước 1: Gọi model ML Kit để khoanh vùng tem/thiết bị trong khung hình
                 val results: List<DetectedObjectResult> = detector.analyze(image, rotation)
                 
+                if (_isDebugMode.value) {
+                    val rawDetections = results.map { res ->
+                        RawDetection(
+                            boundingBox = res.boundingBox,
+                            trackingId = res.trackingId,
+                            labels = res.labels.map { it.text }
+                        )
+                    }
+                    _debugDetections.value = rawDetections
+                }
+
                 // Bước 2: Duyệt qua các vật thể detect được
                 for (result in results) {
                     // Bước 3: Lấy toạ độ tâm 2D (trên frame ảnh) của vật thể
@@ -92,6 +126,8 @@ class XRMainViewModel : ViewModel() {
                 // LUÔN LUÔN close imageProxy sau khi phân tích xong để CameraX feed frame mới.
                 imageProxy.close()
                 isProcessingFrame = false
+                // Tắt cờ scan để đảm bảo chỉ quét duy nhất 1 frame mỗi lần bấm nút
+                shouldScan = false
             }
         }
     }

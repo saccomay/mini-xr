@@ -58,7 +58,13 @@ class MLKitObjectDetector(context: Activity) : ObjectDetector(context) {
       val bestLabel = obj.labels.maxByOrNull { label -> label.confidence } ?: return@mapNotNull null
       val coords = obj.boundingBox.exactCenterX().toInt() to obj.boundingBox.exactCenterY().toInt()
       val rotatedCoordinates = coords.rotateCoordinates(rotatedImage.width, rotatedImage.height, imageRotation)
-      DetectedObjectResult(bestLabel.confidence, bestLabel.text, rotatedCoordinates)
+      DetectedObjectResult(
+        confidence = bestLabel.confidence,
+        label = bestLabel.text,
+        centerCoordinate = rotatedCoordinates,
+        rect = obj.boundingBox,
+        bitMap = rotatedImage
+      )
     }
   }
 

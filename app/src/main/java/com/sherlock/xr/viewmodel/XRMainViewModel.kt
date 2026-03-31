@@ -1,6 +1,8 @@
 package com.sherlock.xr.viewmodel
 
 import android.media.Image
+import androidx.annotation.OptIn
+import androidx.camera.core.ExperimentalGetImage
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sherlock.xr.classification.DetectedObjectResult
@@ -27,8 +29,9 @@ data class AnchoredDevice(
 
 data class RawDetection(
     val boundingBox: android.graphics.Rect,
-    val trackingId: Int?,
-    val labels: List<String>
+    val label: String,
+    val imageWidth: Int = 480,
+    val imageHeight: Int = 640
 )
 
 class XRMainViewModel : ViewModel() {
@@ -38,6 +41,13 @@ class XRMainViewModel : ViewModel() {
     // Danh sách các vùng detect thô cho chế độ Debug
     private val _debugDetections = MutableStateFlow<List<RawDetection>>(emptyList())
     val debugDetections: StateFlow<List<RawDetection>> = _debugDetections.asStateFlow()
+
+    private val _previewUseCase = MutableStateFlow<androidx.camera.core.Preview?>(null)
+    val previewUseCase: StateFlow<androidx.camera.core.Preview?> = _previewUseCase.asStateFlow()
+
+    fun setPreviewUseCase(useCase: androidx.camera.core.Preview?) {
+        _previewUseCase.value = useCase
+    }
 
     // Flow to emit 2D coordinates that need to be raycasted by the UI
     private val _pendingRaycasts = MutableSharedFlow<FloatArray>()
@@ -70,6 +80,7 @@ class XRMainViewModel : ViewModel() {
     }
 
     // Hàm này được CameraX (File MainActivity) gọi liên tục mỗi khi có frame mới từ Camera thực.
+    @OptIn(androidx.camera.core.ExperimentalGetImage::class)
     fun processCameraFrame(imageProxy: androidx.camera.core.ImageProxy) {
         if (!shouldScan && !_isDebugMode.value) { 
             // Nếu không có lệnh triggerScan và KHÔNG ở chế độ Debug auto-scan thì bỏ qua frame
@@ -90,6 +101,12 @@ class XRMainViewModel : ViewModel() {
         }
         val rotation = imageProxy.imageInfo.rotationDegrees
 
+        // CHÚ Ý: Reset trigger ngay từ đầu để không bị nhảy nhiều frame
+        val wasTriggered = shouldScan
+        if (wasTriggered) {
+            shouldScan = false
+        }
+
         isProcessingFrame = true
 
         // CHÚ Ý: Chuyển sang Dispatchers.Default để các tác vụ nặng (Convert YUV sang RGB, 
@@ -104,30 +121,31 @@ class XRMainViewModel : ViewModel() {
                 if (_isDebugMode.value) {
                     val rawDetections = results.map { res ->
                         RawDetection(
-                            boundingBox = res.boundingBox,
-                            trackingId = res.trackingId,
-                            labels = res.labels.map { it.text }
+                            boundingBox = res.rect,
+                            label = res.label,
+                            imageWidth = res.bitMap.width,
+                            imageHeight = res.bitMap.height
                         )
                     }
                     _debugDetections.value = rawDetections
                 }
 
-                // Bước 2: Duyệt qua các vật thể detect được
-                for (result in results) {
-                    // Bước 3: Lấy toạ độ tâm 2D (trên frame ảnh) của vật thể
-                    val (x, y) = result.centerCoordinate
-                    
-                    // Bước 4: Đẩy toạ độ cộng thêm kích thước khung hình sang UI
-                    _pendingRaycasts.emit(
-                        floatArrayOf(x.toFloat(), y.toFloat(), image.width.toFloat(), image.height.toFloat())
-                    )
+                if (wasTriggered) {
+                    // Bước 2: Duyệt qua các vật thể detect được
+                    for (result in results) {
+                        // Bước 3: Lấy toạ độ tâm 2D (trên frame ảnh) của vật thể
+                        val (x, y) = result.centerCoordinate
+                        
+                        // Bước 4: Đẩy toạ độ cộng thêm kích thước khung hình sang UI
+                        _pendingRaycasts.emit(
+                            floatArrayOf(x.toFloat(), y.toFloat(), image.width.toFloat(), image.height.toFloat())
+                        )
+                    }
                 }
             } finally {
                 // LUÔN LUÔN close imageProxy sau khi phân tích xong để CameraX feed frame mới.
                 imageProxy.close()
                 isProcessingFrame = false
-                // Tắt cờ scan để đảm bảo chỉ quét duy nhất 1 frame mỗi lần bấm nút
-                shouldScan = false
             }
         }
     }

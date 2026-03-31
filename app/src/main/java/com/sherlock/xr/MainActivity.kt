@@ -67,15 +67,18 @@ class MainActivity : ComponentActivity() {
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
                 .also {
-                    it.setAnalyzer(cameraExecutor, ImageAnalysis.Analyzer { imageProxy ->
+                    it.setAnalyzer(cameraExecutor) { imageProxy ->
                         viewModel.processCameraFrame(imageProxy)
-                    })
+                    }
                 }
+            val previewUseCase = androidx.camera.core.Preview.Builder().build()
+
             try {
                 cameraProvider.unbindAll()
                 cameraProvider.bindToLifecycle(
-                    this, CameraSelector.DEFAULT_BACK_CAMERA, imageAnalyzer
+                    this, CameraSelector.DEFAULT_BACK_CAMERA, previewUseCase, imageAnalyzer
                 )
+                viewModel.setPreviewUseCase(previewUseCase)
             } catch(exc: Exception) {
                 Log.e("MainActivity", "Use case binding failed", exc)
             }

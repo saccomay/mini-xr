@@ -16,14 +16,21 @@
 
 package com.sherlock.xr.classification
 
+import android.graphics.Bitmap
+import android.graphics.Rect
+
 /**
  * A [DetectedObjectResult] describes a single result in a labeled image.
  * @property confidence The model's reported confidence for this inference result (normalized over `[0, 1]`).
  * @property label The model's reported label for this result.
  * @property centerCoordinate A point on the image that best describes the object's location.
+ * @property rect The bounding box of the detected object.
+ * @property bitMap The full image containing the detected object.
  */
 data class DetectedObjectResult(
   val confidence: Float,
   val label: String,
-  val centerCoordinate: Pair<Int, Int>
+  val centerCoordinate: Pair<Int, Int>,
+  val rect: Rect,
+  val bitMap: Bitmap
 )

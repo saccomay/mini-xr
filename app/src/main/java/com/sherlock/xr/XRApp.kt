@@ -12,6 +12,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -21,7 +22,10 @@ import androidx.xr.compose.platform.LocalSpatialCapabilities
 import androidx.xr.compose.spatial.Subspace
 import androidx.xr.compose.subspace.SpatialPanel
 import androidx.xr.compose.subspace.layout.SubspaceModifier
+import androidx.xr.compose.subspace.layout.gravityAligned
 import androidx.xr.compose.subspace.layout.offset
+import androidx.xr.compose.subspace.layout.rotateToLookAtUser
+import androidx.xr.compose.unit.Meter
 import androidx.xr.scenecore.scene
 import com.sherlock.xr.ui.DetailedPopup
 import com.sherlock.xr.ui.LabelBadge
@@ -198,8 +202,17 @@ fun XRApp(viewModel: XRMainViewModel = viewModel()) {
 
     Subspace {
         if (!isDebugMode && isSpatialUiEnabled) {
-            // Bảng điều khiển (Control Panel) đặt cố định trước mặt người dùng (khoảng cách 800mm)
-            SpatialPanel(modifier = SubspaceModifier.offset(x = 0.dp, y = (-200).dp, z = (-800).dp)) {
+            SpatialPanel(
+                modifier = SubspaceModifier
+                    .offset(
+                        x = 0.dp,
+                        y = Meter(-0.2f).toDp(),
+                        z = Meter(-0.8f).toDp()
+                    )
+                    // Billboard: tự xoay về phía user, giữ thẳng đứng theo trục Y
+                    .rotateToLookAtUser()
+                    .gravityAligned()
+            ) {
                 ControlPanel(
                     viewModel = viewModel,
                     devices = devices,
@@ -213,21 +226,24 @@ fun XRApp(viewModel: XRMainViewModel = viewModel()) {
         }
 
         devices.forEach { device ->
+            val xDp = Meter(device.worldPosition.x).toDp()
+            val yDp = Meter(device.worldPosition.y).toDp()
+            val zDp = Meter(device.worldPosition.z).toDp()
+
             SpatialPanel(
-                modifier = SubspaceModifier.offset(
-                    x = (device.worldPosition.x * 1000).dp,
-                    y = (device.worldPosition.y * 1000).dp,
-                    z = (device.worldPosition.z * 1000).dp
-                )
+                modifier = SubspaceModifier
+                    .offset(x = xDp, y = yDp, z = zDp)
+                    .rotateToLookAtUser()
+                    .gravityAligned()
             ) { LabelBadge(info = device.info) { viewModel.toggleDetail(device.id) } }
 
             if (device.isDetailOpen) {
+                val popupYDp = Meter(device.worldPosition.y + 0.3f).toDp()
                 SpatialPanel(
-                    modifier = SubspaceModifier.offset(
-                        x = (device.worldPosition.x * 1000).dp,
-                        y = (device.worldPosition.y * 1000 + 350).dp,
-                        z = (device.worldPosition.z * 1000).dp
-                    )
+                    modifier = SubspaceModifier
+                        .offset(x = xDp, y = popupYDp, z = zDp)
+                        .rotateToLookAtUser()
+                        .gravityAligned()
                 ) { DetailedPopup(info = device.info) }
             }
         }

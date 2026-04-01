@@ -82,8 +82,10 @@ class XRMainViewModel : ViewModel() {
     // Hàm này được CameraX (File MainActivity) gọi liên tục mỗi khi có frame mới từ Camera thực.
     @OptIn(androidx.camera.core.ExperimentalGetImage::class)
     fun processCameraFrame(imageProxy: androidx.camera.core.ImageProxy) {
-        if (!shouldScan && !_isDebugMode.value) { 
-            // Nếu không có lệnh triggerScan và KHÔNG ở chế độ Debug auto-scan thì bỏ qua frame
+        // BUG FIX: Chỉ xử lý frame khi có lệnh triggerScan (shouldScan = true).
+        // Debug mode chỉ điều khiển việc HIỂN THỊ kết quả, KHÔNG tự động scan liên tục.
+        // Trước đây logic "!shouldScan && !isDebugMode" khiến debug mode bật thì scan mọi frame.
+        if (!shouldScan) {
             imageProxy.close()
             return
         }
@@ -101,12 +103,8 @@ class XRMainViewModel : ViewModel() {
         }
         val rotation = imageProxy.imageInfo.rotationDegrees
 
-        // CHÚ Ý: Reset trigger ngay từ đầu để không bị nhảy nhiều frame
-        val wasTriggered = shouldScan
-        if (wasTriggered) {
-            shouldScan = false
-        }
-
+        // Reset shouldScan ngay lập tức để chỉ xử lý duy nhất 1 frame này
+        shouldScan = false
         isProcessingFrame = true
 
         // CHÚ Ý: Chuyển sang Dispatchers.Default để các tác vụ nặng (Convert YUV sang RGB, 
@@ -118,29 +116,33 @@ class XRMainViewModel : ViewModel() {
                 // Bước 1: Gọi model ML Kit để khoanh vùng tem/thiết bị trong khung hình
                 val results: List<DetectedObjectResult> = detector.analyze(image, rotation)
                 
-                if (_isDebugMode.value) {
-                    val rawDetections = results.map { res ->
-                        RawDetection(
-                            boundingBox = res.rect,
-                            label = res.label,
-                            imageWidth = res.bitMap.width,
-                            imageHeight = res.bitMap.height
-                        )
-                    }
-                    _debugDetections.value = rawDetections
+                // Cập nhật debug overlay (chỉ hiển thị nếu isDebugMode = true ở UI layer)
+                val rawDetections = results.map { res ->
+                    RawDetection(
+                        boundingBox = res.rect,
+                        label = res.label,
+                        // Dùng kích thước bitMap (ảnh đã rotate) để tọa độ bbox khớp với ảnh preview
+                        imageWidth = res.bitMap.width,
+                        imageHeight = res.bitMap.height
+                    )
                 }
+                _debugDetections.value = rawDetections
 
-                if (wasTriggered) {
-                    // Bước 2: Duyệt qua các vật thể detect được
-                    for (result in results) {
-                        // Bước 3: Lấy toạ độ tâm 2D (trên frame ảnh) của vật thể
-                        val (x, y) = result.centerCoordinate
-                        
-                        // Bước 4: Đẩy toạ độ cộng thêm kích thước khung hình sang UI
-                        _pendingRaycasts.emit(
-                            floatArrayOf(x.toFloat(), y.toFloat(), image.width.toFloat(), image.height.toFloat())
+                // Bước 2: Duyệt qua các vật thể detect được để tạo anchor 3D
+                for (result in results) {
+                    // Bước 3: Lấy toạ độ tâm 2D (trong rotatedImage space)
+                    val (x, y) = result.centerCoordinate
+                    
+                    // Bước 4: Đẩy toạ độ + kích thước ảnh đã rotate sang UI để raycast
+                    // QUAN TRỌNG: Phải dùng bitMap.width/height (ảnh đã rotate),
+                    // KHÔNG dùng image.width/height (YUV thô chưa rotate) → tọa độ sẽ bị lật.
+                    _pendingRaycasts.emit(
+                        floatArrayOf(
+                            x.toFloat(), y.toFloat(),
+                            result.bitMap.width.toFloat(),
+                            result.bitMap.height.toFloat()
                         )
-                    }
+                    )
                 }
             } finally {
                 // LUÔN LUÔN close imageProxy sau khi phân tích xong để CameraX feed frame mới.

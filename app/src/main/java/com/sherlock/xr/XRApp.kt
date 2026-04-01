@@ -48,39 +48,46 @@ fun XRApp(viewModel: XRMainViewModel = viewModel()) {
     // Phân tích toạ độ 2D từ CameraX và ánh xạ thành toạ độ Không gian 3D (Raycast Approximation)
     LaunchedEffect(viewModel.pendingRaycasts) {
         viewModel.pendingRaycasts.collect { data ->
-            session?.let { xrSession ->
+            session?.let { _ ->
                 if (data.size >= 4) {
-                    val screenX = data[0]
-                    val screenY = data[1]
-                    val width = data[2]
-                    val height = data[3]
+                    val pixelX = data[0]   // tâm bbox theo X trong rotatedImage space
+                    val pixelY = data[1]   // tâm bbox theo Y trong rotatedImage space
+                    val imgW   = data[2]   // chiều rộng rotatedImage (portrait)
+                    val imgH   = data[3]   // chiều cao rotatedImage (portrait)
 
-                    // Giả định góc nhìn (FOV) của Camera thiết bị XR khoảng 70 ngang, 50 dọc
-                    val fovX = 70f
-                    val fovY = 50f
+                    // FOV của camera thường dung trên thiết bị XR (gần với passthrough camera)
+                    // 63° ngang (theo trục ngắn của ảnh portrait = chiều X)
+                    // 48° dọc (theo trục dài của ảnh portrait = chiều Y)
+                    val halfFovX = 63f / 2f  // °31.5°
+                    val halfFovY = 48f / 2f  // °24°
 
-                    // Chuyển đổi toạ độ pixel (0 -> width) thành khoảng (-1 -> 1)
-                    val normalizedX = (screenX / width) * 2f - 1f
-                    // Y trong ảnh thì 0 nằm ở trên cùng, Hệ trục toạ độ 3D thì Y dương nằm phía trên
-                    val normalizedY = -(screenY / height) * 2f + 1f
+                    // Chuẩn hoá tọa độ pixel vào khoảng (-1..+1)
+                    // X: 0 = trái, imgW = phải → -1 = trái, +1 = phải
+                    // Y: 0 = trên, imgH = dưới → +1 = trên, -1 = dưới (y-flip do hệ trục 3D y-up)
+                    val ndcX = (pixelX / imgW) * 2f - 1f
+                    val ndcY = -((pixelY / imgH) * 2f - 1f)  // y-flip
 
-                    // Đổi sang góc quay
-                    val angleX = normalizedX * (fovX / 2f)
-                    val angleY = normalizedY * (fovY / 2f)
+                    // Tính góc quay tương ứng (theo đơn vị radian)
+                    val yawRad   = Math.toRadians((ndcX * halfFovX).toDouble()).toFloat()  // quay trái/phải
+                    val pitchRad = Math.toRadians((ndcY * halfFovY).toDouble()).toFloat()  // quay lên/xuống
 
-                    // Tính toạ độ Vector chỉ hướng (Direction Vector)
-                    val dirX = kotlin.math.sin(Math.toRadians(angleX.toDouble())).toFloat()
-                    val dirY = kotlin.math.sin(Math.toRadians(angleY.toDouble())).toFloat()
-                    val dirZ = -kotlin.math.cos(Math.toRadians(angleX.toDouble())).toFloat()
+                    // FIX: Công thức spherical -> cartesian đúng:
+                    // dirX = sin(yaw)  * cos(pitch)  ← FIX: nhân cos(pitch) để trục X chính xác
+                    // dirY = sin(pitch)              ← Đúng
+                    // dirZ = -cos(yaw) * cos(pitch)  ← FIX: nhân cos(pitch) để trục Z chính xác
+                    // Thiếu cos(pitch) khiến đối tượng ở góc ngắn nhìn sẽ bị đặt sai vị trí
+                    val cosPitch = kotlin.math.cos(pitchRad.toDouble()).toFloat()
+                    val dirX =  kotlin.math.sin(yawRad.toDouble()).toFloat()   * cosPitch
+                    val dirY =  kotlin.math.sin(pitchRad.toDouble()).toFloat()
+                    val dirZ = -kotlin.math.cos(yawRad.toDouble()).toFloat()   * cosPitch
 
-                    // Đặt Label cách mắt người dùng (tâm 0,0) khoảng 1.2 mét về phía tia nhìn
-                    val distance = 1.2f
-                    val targetPos =
-                            com.sherlock.xr.viewmodel.MyVector3(
-                                    dirX * distance,
-                                    dirY * distance,
-                                    dirZ * distance
-                            )
+                    // Đặt label cách mắt người dùng 1.5 mét (1 mét = 1000 dp trong XR space)
+                    val distanceMeters = 1.5f
+                    val targetPos = com.sherlock.xr.viewmodel.MyVector3(
+                        dirX * distanceMeters,
+                        dirY * distanceMeters,
+                        dirZ * distanceMeters
+                    )
 
                     viewModel.onRaycastSuccessMockDataset(targetPos)
                 }
@@ -100,6 +107,7 @@ fun XRApp(viewModel: XRMainViewModel = viewModel()) {
         }
 
         // --- Bounding-box overlay + debug text ---
+        // Scale theo FILL_CENTER của PreviewView: dùng maxOf để fill toàn màn hình (crop phần thừa)
         if (isDebugMode && debugDetections.isNotEmpty()) {
             androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
                 debugDetections.forEach { detection ->
@@ -107,25 +115,44 @@ fun XRApp(viewModel: XRMainViewModel = viewModel()) {
                     val imgW = detection.imageWidth.toFloat().coerceAtLeast(1f)
                     val imgH = detection.imageHeight.toFloat().coerceAtLeast(1f)
 
-                    // Tính scale để fit ảnh vào canvas (Scale theo chiều nhỏ hơn – giống ContentScale.Fit)
-                    val scaleX = size.width / imgW
-                    val scaleY = size.height / imgH
-                    // Dùng min scale để không bị méo (ảnh đã rotate nên fit là đúng)
-                    val scale = minOf(scaleX, scaleY)
-                    val offsetX = (size.width - imgW * scale) / 2f
+                    // FILL_CENTER: scale theo chiều lớn hơn để fill toàn canvas
+                    val scale = maxOf(size.width / imgW, size.height / imgH)
+
+                    // Offset để căn giữa (giống PreviewView căn giữa sau khi crop)
+                    val offsetX = (size.width  - imgW * scale) / 2f
                     val offsetY = (size.height - imgH * scale) / 2f
 
+                    // Vẽ bounding box màu đỏ
                     drawRect(
                         color = androidx.compose.ui.graphics.Color.Red,
                         topLeft = androidx.compose.ui.geometry.Offset(
-                            rect.left * scale + offsetX,
-                            rect.top * scale + offsetY
+                            rect.left  * scale + offsetX,
+                            rect.top   * scale + offsetY
                         ),
                         size = androidx.compose.ui.geometry.Size(
-                            rect.width() * scale,
+                            rect.width()  * scale,
                             rect.height() * scale
                         ),
-                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 5f)
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 4f)
+                    )
+
+                    // Vẽ crosshair (+) tại tâm bbox để kiểm tra độ chính xác
+                    val cx = rect.exactCenterX() * scale + offsetX
+                    val cy = rect.exactCenterY() * scale + offsetY
+                    val arm = 20f  // độ dài cánh crosshair (px)
+                    // Crosshair năm ngang
+                    drawLine(
+                        color = androidx.compose.ui.graphics.Color.Green,
+                        start = androidx.compose.ui.geometry.Offset(cx - arm, cy),
+                        end   = androidx.compose.ui.geometry.Offset(cx + arm, cy),
+                        strokeWidth = 4f
+                    )
+                    // Crosshair thẳng đứng
+                    drawLine(
+                        color = androidx.compose.ui.graphics.Color.Green,
+                        start = androidx.compose.ui.geometry.Offset(cx, cy - arm),
+                        end   = androidx.compose.ui.geometry.Offset(cx, cy + arm),
+                        strokeWidth = 4f
                     )
                 }
             }

@@ -19,7 +19,6 @@ package com.sherlock.xr.classification
 import android.app.Activity
 import android.media.Image
 import com.sherlock.xr.classification.utils.ImageUtils
-import com.sherlock.xr.classification.utils.VertexUtils.rotateCoordinates
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.objects.ObjectDetection
 import com.google.mlkit.vision.objects.custom.CustomObjectDetectorOptions
@@ -48,21 +47,29 @@ class MLKitObjectDetector(context: Activity) : ObjectDetector(context) {
     // `image` is in YUV (https://developers.google.com/ar/reference/java/com/google/ar/core/Frame#acquireCameraImage()),
     val convertYuv = convertYuv(image)
 
-    // The model performs best on upright images, so rotate it.
+    // Rotate ảnh cho thẳng đứng để model hoạt động chính xác nhất.
+    // Sau khi rotate, toàn bộ tọa độ (bounding box, center) đều ở trong không gian ảnh đã-rotate.
     val rotatedImage = ImageUtils.rotateBitmap(convertYuv, imageRotation)
 
+    // Đưa ảnh vào ML Kit với rotation = 0 vì ảnh đã được rotate thủ công ở bước trên.
+    // Điều này đảm bảo ML Kit trả về bounding box ĐÃ đúng chiều – KHÔNG cần rotate lại.
     val inputImage = InputImage.fromBitmap(rotatedImage, 0)
 
     val mlKitDetectedObjects = detector.process(inputImage).asDeferred().await()
     return mlKitDetectedObjects.mapNotNull { obj ->
       val bestLabel = obj.labels.maxByOrNull { label -> label.confidence } ?: return@mapNotNull null
-      val coords = obj.boundingBox.exactCenterX().toInt() to obj.boundingBox.exactCenterY().toInt()
-      val rotatedCoordinates = coords.rotateCoordinates(rotatedImage.width, rotatedImage.height, imageRotation)
+
+      // BUG FIX: Không gọi rotateCoordinates() ở đây!
+      // Tọa độ center của bbox ĐÃ nằm trong không gian ảnh rotatedImage (đúng chiều).
+      // Nếu gọi thêm rotateCoordinates() sẽ bị "xoay 2 lần" → toạ độ sai.
+      val centerX = obj.boundingBox.exactCenterX().toInt()
+      val centerY = obj.boundingBox.exactCenterY().toInt()
+
       DetectedObjectResult(
         confidence = bestLabel.confidence,
         label = bestLabel.text,
-        centerCoordinate = rotatedCoordinates,
-        rect = obj.boundingBox,
+        centerCoordinate = centerX to centerY,  // Tọa độ đúng trong rotatedImage space
+        rect = obj.boundingBox,                  // Bounding box đúng trong rotatedImage space
         bitMap = rotatedImage
       )
     }

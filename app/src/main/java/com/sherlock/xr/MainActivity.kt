@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.util.Log
+import android.util.Size
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -63,7 +64,19 @@ class MainActivity : ComponentActivity() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
             val cameraProvider: ProcessCameraProvider = cameraProviderFuture.get()
+
+            // QUAN TRỌNG: Cả Preview và ImageAnalysis phải có cùng target resolution.
+            // Nếu khác nhau, bounding box từ ML Kit (tọa độ ImageAnalysis space)
+            // sẽ không bao giờ khớp chính xác với những gì PreviewView hiển thị.
+            // 960×720 = tỷ lệ 4:3, cân bằng giữa độ chính xác và hiệu năng.
+            val targetResolution = Size(960, 720)
+
+            val previewUseCase = androidx.camera.core.Preview.Builder()
+                .setTargetResolution(targetResolution)
+                .build()
+
             val imageAnalyzer = ImageAnalysis.Builder()
+                .setTargetResolution(targetResolution)
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
                 .also {
@@ -71,7 +84,6 @@ class MainActivity : ComponentActivity() {
                         viewModel.processCameraFrame(imageProxy)
                     }
                 }
-            val previewUseCase = androidx.camera.core.Preview.Builder().build()
 
             try {
                 cameraProvider.unbindAll()

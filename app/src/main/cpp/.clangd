@@ -1,0 +1,8 @@
+CompileFlags:
+  Add:
+    - "-DXR_USE_PLATFORM_ANDROID"
+    - "-isystem/Volumes/T7/sdk/ndk/28.0.12433566/toolchains/llvm/prebuilt/darwin-x86_64/sysroot/usr/include"
+    - "-isystem/Volumes/T7/sdk/ndk/28.0.12433566/toolchains/llvm/prebuilt/darwin-x86_64/sysroot/usr/include/aarch64-linux-android"
+    - "-I/Users/saccomay/work/Lab_XR_Migration/New_XR_Project/app/src/main/cpp/include"
+    - "--target=aarch64-linux-android29"
+    - "-std=c++17"

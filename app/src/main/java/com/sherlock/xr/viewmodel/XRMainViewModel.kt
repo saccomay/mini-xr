@@ -1,6 +1,5 @@
 package com.sherlock.xr.viewmodel
 
-import android.media.Image
 import androidx.annotation.OptIn
 import androidx.camera.core.ExperimentalGetImage
 import androidx.lifecycle.ViewModel
@@ -9,10 +8,9 @@ import com.sherlock.xr.classification.DetectedObjectResult
 import com.sherlock.xr.classification.ObjectDetector
 import com.sherlock.xr.data.DeviceInfo
 import com.sherlock.xr.data.DeviceRepository
-import kotlinx.coroutines.flow.MutableSharedFlow
+import com.sherlock.xr.spatial.CoordinateMapper
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -49,9 +47,15 @@ class XRMainViewModel : ViewModel() {
         _previewUseCase.value = useCase
     }
 
-    // Flow to emit 2D coordinates that need to be raycasted by the UI
-    private val _pendingRaycasts = MutableSharedFlow<FloatArray>()
-    val pendingRaycasts = _pendingRaycasts.asSharedFlow()
+    // Khoảng cách ước tính từ user đến thiết bị vật lý (meters).
+    // Default 0.6m vì device đặt trên rack – kỹ thuật viên lại gần mới xem được.
+    // Có thể chỉnh trong ControlPanel (range 0.3m – 3.0m).
+    private val _scanDepthMeters = MutableStateFlow(0.6f)
+    val scanDepthMeters: StateFlow<Float> = _scanDepthMeters.asStateFlow()
+
+    fun setDepth(meters: Float) {
+        _scanDepthMeters.value = meters.coerceIn(0.3f, 3.0f)
+    }
 
     // The ML Kit Detector (to be initialized by the Activity/UI Layer)
     var objectDetector: ObjectDetector? = null
@@ -128,21 +132,27 @@ class XRMainViewModel : ViewModel() {
                 }
                 _debugDetections.value = rawDetections
 
-                // Bước 2: Duyệt qua các vật thể detect được để tạo anchor 3D
+                // Bước 2: Duyệt qua các vật thể detect được → tính toán vị trí 3D ngay tại đây.
                 for (result in results) {
-                    // Bước 3: Lấy toạ độ tâm 2D (trong rotatedImage space)
-                    val (x, y) = result.centerCoordinate
-                    
-                    // Bước 4: Đẩy toạ độ + kích thước ảnh đã rotate sang UI để raycast
-                    // QUAN TRỌNG: Phải dùng bitMap.width/height (ảnh đã rotate),
-                    // KHÔNG dùng image.width/height (YUV thô chưa rotate) → tọa độ sẽ bị lật.
-                    _pendingRaycasts.emit(
-                        floatArrayOf(
-                            x.toFloat(), y.toFloat(),
-                            result.bitMap.width.toFloat(),
-                            result.bitMap.height.toFloat()
-                        )
+                    // Bước 2a: Lấy tọa độ tâm 2D (trong rotatedImage space, sau khi rotate).
+                    //  QUAN TRỌNG: Dùng bitMap.width/height (ảnh đã rotate),
+                    //  KHÔNG dùng image.width/height (YUV thô chưa rotate) → tọa độ bị lật.
+                    val (cx, cy) = result.centerCoordinate
+                    val imgW = result.bitMap.width.toFloat()
+                    val imgH = result.bitMap.height.toFloat()
+
+                    // Bước 2b: Chuyển tọa độ 2D sang vị trí 3D trong ActivitySpace.
+                    //  Dùng CoordinateMapper với depth có thể cấu hình bởi user.
+                    val worldPos = CoordinateMapper.pixelToWorld(
+                        pixelX = cx.toFloat(),
+                        pixelY = cy.toFloat(),
+                        imgW   = imgW,
+                        imgH   = imgH,
+                        depthM = _scanDepthMeters.value,
                     )
+
+                    // Bước 2c: Tạo AnchoredDevice tại vị trí vừa tính.
+                    onRaycastSuccessMockDataset(worldPos)
                 }
             } finally {
                 // LUÔN LUÔN close imageProxy sau khi phân tích xong để CameraX feed frame mới.

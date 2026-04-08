@@ -6,7 +6,11 @@
         android:required="false" />
 
     <uses-permission android:name="android.permission.CAMERA" />
+  <!-- Plane detection + hit-test -->
+  <uses-permission android:name="android.permission.SCENE_UNDERSTANDING_COARSE" />
   <uses-permission android:name="android.permission.SCENE_UNDERSTANDING" />
+  <!-- Head pose tracking (Phase 2: ARCore ArDevice) -->
+  <uses-permission android:name="android.permission.HEAD_TRACKING" />
 
   <application
       android:allowBackup="true"

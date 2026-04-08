@@ -12,7 +12,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -24,7 +23,6 @@ import androidx.xr.compose.subspace.SpatialPanel
 import androidx.xr.compose.subspace.layout.SubspaceModifier
 import androidx.xr.compose.subspace.layout.gravityAligned
 import androidx.xr.compose.subspace.layout.offset
-import androidx.xr.compose.subspace.layout.rotateToLookAtUser
 import androidx.xr.compose.unit.Meter
 import androidx.xr.scenecore.scene
 import com.sherlock.xr.ui.DetailedPopup
@@ -49,55 +47,9 @@ fun XRApp(viewModel: XRMainViewModel = viewModel()) {
         }
     }
 
-    // Phân tích toạ độ 2D từ CameraX và ánh xạ thành toạ độ Không gian 3D (Raycast Approximation)
-    LaunchedEffect(viewModel.pendingRaycasts) {
-        viewModel.pendingRaycasts.collect { data ->
-            session?.let { _ ->
-                if (data.size >= 4) {
-                    val pixelX = data[0]   // tâm bbox theo X trong rotatedImage space
-                    val pixelY = data[1]   // tâm bbox theo Y trong rotatedImage space
-                    val imgW   = data[2]   // chiều rộng rotatedImage (portrait)
-                    val imgH   = data[3]   // chiều cao rotatedImage (portrait)
-
-                    // FOV của camera thường dung trên thiết bị XR (gần với passthrough camera)
-                    // 63° ngang (theo trục ngắn của ảnh portrait = chiều X)
-                    // 48° dọc (theo trục dài của ảnh portrait = chiều Y)
-                    val halfFovX = 63f / 2f  // °31.5°
-                    val halfFovY = 48f / 2f  // °24°
-
-                    // Chuẩn hoá tọa độ pixel vào khoảng (-1..+1)
-                    // X: 0 = trái, imgW = phải → -1 = trái, +1 = phải
-                    // Y: 0 = trên, imgH = dưới → +1 = trên, -1 = dưới (y-flip do hệ trục 3D y-up)
-                    val ndcX = (pixelX / imgW) * 2f - 1f
-                    val ndcY = -((pixelY / imgH) * 2f - 1f)  // y-flip
-
-                    // Tính góc quay tương ứng (theo đơn vị radian)
-                    val yawRad   = Math.toRadians((ndcX * halfFovX).toDouble()).toFloat()  // quay trái/phải
-                    val pitchRad = Math.toRadians((ndcY * halfFovY).toDouble()).toFloat()  // quay lên/xuống
-
-                    // FIX: Công thức spherical -> cartesian đúng:
-                    // dirX = sin(yaw)  * cos(pitch)  ← FIX: nhân cos(pitch) để trục X chính xác
-                    // dirY = sin(pitch)              ← Đúng
-                    // dirZ = -cos(yaw) * cos(pitch)  ← FIX: nhân cos(pitch) để trục Z chính xác
-                    // Thiếu cos(pitch) khiến đối tượng ở góc ngắn nhìn sẽ bị đặt sai vị trí
-                    val cosPitch = kotlin.math.cos(pitchRad.toDouble()).toFloat()
-                    val dirX =  kotlin.math.sin(yawRad.toDouble()).toFloat()   * cosPitch
-                    val dirY =  kotlin.math.sin(pitchRad.toDouble()).toFloat()
-                    val dirZ = -kotlin.math.cos(yawRad.toDouble()).toFloat()   * cosPitch
-
-                    // Đặt label cách mắt người dùng 1.5 mét (1 mét = 1000 dp trong XR space)
-                    val distanceMeters = 1.5f
-                    val targetPos = com.sherlock.xr.viewmodel.MyVector3(
-                        dirX * distanceMeters,
-                        dirY * distanceMeters,
-                        dirZ * distanceMeters
-                    )
-
-                    viewModel.onRaycastSuccessMockDataset(targetPos)
-                }
-            }
-        }
-    }
+    // [ĐÃ XÓA] LaunchedEffect pendingRaycasts:
+    // Việc tính tọa độ 3D đã được chuyển hoàn toàn vào ViewModel.processCameraFrame()
+    // thông qua CoordinateMapper.pixelToWorld(). Không cần UI layer can thiệp nữa.
 
     // 2D UI (Chỉ hiện rõ khi ở Home Space / Debug Mode)
     Box(modifier = Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black)) {
@@ -209,8 +161,6 @@ fun XRApp(viewModel: XRMainViewModel = viewModel()) {
                         y = Meter(-0.2f).toDp(),
                         z = Meter(-0.8f).toDp()
                     )
-                    // Billboard: tự xoay về phía user, giữ thẳng đứng theo trục Y
-                    .rotateToLookAtUser()
                     .gravityAligned()
             ) {
                 ControlPanel(
@@ -233,7 +183,6 @@ fun XRApp(viewModel: XRMainViewModel = viewModel()) {
             SpatialPanel(
                 modifier = SubspaceModifier
                     .offset(x = xDp, y = yDp, z = zDp)
-                    .rotateToLookAtUser()
                     .gravityAligned()
             ) { LabelBadge(info = device.info) { viewModel.toggleDetail(device.id) } }
 
@@ -242,7 +191,6 @@ fun XRApp(viewModel: XRMainViewModel = viewModel()) {
                 SpatialPanel(
                     modifier = SubspaceModifier
                         .offset(x = xDp, y = popupYDp, z = zDp)
-                        .rotateToLookAtUser()
                         .gravityAligned()
                 ) { DetailedPopup(info = device.info) }
             }
@@ -257,29 +205,63 @@ fun ControlPanel(
     isDebugMode: Boolean,
     onToggleDebug: () -> Unit
 ) {
-    Row(
+    val depth by viewModel.scanDepthMeters.collectAsState()
+
+    Column(
         modifier = Modifier
             .background(
                 androidx.compose.ui.graphics.Color(0xFF2C2C2E).copy(alpha = 0.8f),
-                androidx.compose.foundation.shape.RoundedCornerShape(32.dp)
+                androidx.compose.foundation.shape.RoundedCornerShape(16.dp)
             )
             .padding(horizontal = 24.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Button(onClick = { viewModel.triggerScan() }) {
-            Icon(Icons.Filled.Search, contentDescription = "Scan")
-            Spacer(Modifier.width(8.dp))
-            Text("Scan")
+        // ── Hàng 1: Scan / Clear / Debug buttons ───────────────────────────
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Button(onClick = { viewModel.triggerScan() }) {
+                Icon(Icons.Filled.Search, contentDescription = "Scan")
+                Spacer(Modifier.width(8.dp))
+                Text("Scan")
+            }
+            Spacer(Modifier.width(16.dp))
+            Button(onClick = { viewModel.clearData() }, enabled = devices.isNotEmpty()) {
+                Icon(Icons.Filled.Delete, contentDescription = "Clear")
+                Spacer(Modifier.width(8.dp))
+                Text("Clear")
+            }
+            Spacer(Modifier.width(16.dp))
+            Button(onClick = onToggleDebug) {
+                Text(if (isDebugMode) "Exit Debug" else "Debug")
+            }
         }
-        Spacer(Modifier.width(16.dp))
-        Button(onClick = { viewModel.clearData() }, enabled = devices.isNotEmpty()) {
-            Icon(Icons.Filled.Delete, contentDescription = "Clear")
-            Spacer(Modifier.width(8.dp))
-            Text("Clear")
-        }
-        Spacer(Modifier.width(16.dp))
-        Button(onClick = onToggleDebug) {
-            Text(if (isDebugMode) "Exit Debug" else "Debug Mode")
+
+        // ── Hàng 2: Depth slider ────────────────────────────────────────────
+        // Cho phép kỹ thuật viên điều chỉnh khoảng cách (depth) đến thiết bị
+        // mà không cần biên dịch lại. Range 0.3m–3.0m phù hợp cho môi trường lab rack.
+        Spacer(Modifier.height(4.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = "Depth:",
+                color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.7f),
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.width(52.dp)
+            )
+            Slider(
+                value  = depth,
+                onValueChange = { viewModel.setDepth(it) },
+                valueRange = 0.3f..3.0f,
+                steps = 26,   // bước 0.1m: (3.0 - 0.3) / 0.1 - 1 = 26
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = String.format("%.1fm", depth),
+                color = androidx.compose.ui.graphics.Color.White,
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.width(40.dp)
+            )
         }
     }
 }
